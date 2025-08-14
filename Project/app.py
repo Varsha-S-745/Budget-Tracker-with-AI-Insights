@@ -6,7 +6,6 @@ from datetime import datetime, date
 import math
 
 try:
-    # Numpy is optional; code falls back gracefully if not present
     import numpy as np
 except Exception:
     np = None
@@ -17,7 +16,6 @@ app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
 
-# ----------------------- DB helpers -----------------------
 def get_db():
     db = getattr(g, "_db", None)
     if db is None:
@@ -37,15 +35,12 @@ def init_db():
         db.executescript(open(os.path.join(os.path.dirname(__file__), "schema.sql"), "r", encoding="utf-8").read())
         db.commit()
 
-# ----------------------- Utility -----------------------
 def parse_date(dstr):
-    # Expect yyyy-mm-dd
     return datetime.strptime(dstr, "%Y-%m-%d").date()
 
 def month_key(dt: date):
     return f"{dt.year}-{dt.month:02d}"
 
-# ----------------------- Routes -----------------------
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -92,7 +87,6 @@ def insights():
 
     today = date.today()
     this_month = f"{today.year}-{today.month:02d}"
-    # Aggregate by month and category
     monthly = {}
     cat_totals_this_month = {}
     cat_all = {}
@@ -100,18 +94,16 @@ def insights():
     for r in tx:
         d = parse_date(r["date"])
         mk = month_key(d)
-        amt = float(r["amount"]) * (1 if r["type"] == "expense" else -1)  # expenses positive, income negative for net
+        amt = float(r["amount"]) * (1 if r["type"] == "expense" else -1)
         monthly.setdefault(mk, 0.0)
         monthly[mk] += amt
 
         if mk == this_month and r["type"] == "expense":
             cat_totals_this_month[r["category"]] = cat_totals_this_month.get(r["category"], 0.0) + float(r["amount"])
 
-        # For outlier detection per category across all expenses
         if r["type"] == "expense":
             cat_all.setdefault(r["category"], []).append(float(r["amount"]))
 
-    # Forecast next month's net using linear regression over last up to 12 months
     sorted_months = sorted(monthly.keys())
     months_tail = sorted_months[-12:]
     forecast = None
@@ -120,14 +112,12 @@ def insights():
         y = [monthly[m] for m in months_tail]
         x = list(range(len(y)))
         if np and len(y) >= 2:
-            coeffs = np.polyfit(x, y, 1)  # slope, intercept
+            coeffs = np.polyfit(x, y, 1)
             trend_slope = float(coeffs[0])
-            forecast = float(np.polyval(coeffs, len(y)))  # next point
+            forecast = float(np.polyval(coeffs, len(y)))
         else:
-            # simple average fallback
             forecast = sum(y) / len(y)
 
-    # Outlier transactions: any expense > mean + 2*std in its category
     outlier_notes = []
     for cat, vals in cat_all.items():
         if len(vals) < 3:
@@ -136,7 +126,6 @@ def insights():
         var = sum((v - mean) ** 2 for v in vals) / len(vals)
         std = math.sqrt(var)
         threshold = mean + 2 * std
-        # list the categories where latest month has values breaching threshold
         for r in tx:
             if r["type"] == "expense" and r["category"] == cat and float(r["amount"]) > threshold:
                 outlier_notes.append({
@@ -146,18 +135,16 @@ def insights():
                     "threshold": round(threshold, 2)
                 })
 
-    # 50/30/20 heuristic (Needs/Wants/Savings)
     needs_categories = {"Rent", "Groceries", "Utilities", "Transport", "Healthcare", "Insurance", "Education"}
     wants_categories = {"Dining", "Entertainment", "Shopping", "Travel", "Subscriptions"}
     savings_categories = {"Investments", "Savings"}
     totals = {"needs": 0.0, "wants": 0.0, "savings": 0.0}
 
-    # compute this month's distribution
     dbmonth = db.execute("SELECT amount, type, category FROM transactions WHERE strftime('%Y-%m', date) = ?", (this_month,)).fetchall()
     for r in dbmonth:
         amt = float(r["amount"])
         if r["type"] == "income":
-            totals["savings"] += amt  # treat income explicitly saved as savings when user enters category "Savings/Investments"
+            totals["savings"] += amt
             continue
         cat = r["category"]
         if cat in needs_categories:
@@ -181,7 +168,6 @@ def insights():
     if guideline["savings_amount"] < 0.2 * (monthly_expense):
         recs.append(f"Set aside at least 20% of expenses for savings/investments. You're currently at ₹{guideline['savings_amount']:.0f}.")
 
-    # Build response
     resp = {
         "monthly_net": [{"month": m, "net": round(monthly[m], 2)} for m in months_tail],
         "forecast_next_month_net": round(forecast, 2) if forecast is not None else None,
@@ -195,7 +181,6 @@ def insights():
     }
     return jsonify(resp)
 
-# ------------- CLI -------------
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Budget Tracker with AI Insights")
